@@ -20,6 +20,7 @@
 #  along with lazy_import.  If not, see <http://www.gnu.org/licenses/>.
 #
 
+import traceback
 import pytest
 import importlib
 import sys
@@ -76,10 +77,10 @@ CALLABLE_NAMES =("fn1", ("fn1"), ("fn1", "fn2"), ("fn1", "fn2", "fn3"))
 ERROR_MSGS = (None, {"msg":"Module: {module}\n"
                            "Caller: {caller}\n"
                            "Install Name: {install_name}\n",
-                     "msg_callable":"Module: {module}\n"
+                     "msg_member":"Module: {module}\n"
                            "Caller: {caller}\n"
                            "Install Name: {install_name}\n"
-                           "Callable: {callable}\n",
+                           "Member: {member}\n",
                      "module":"error_modname",
                      "caller":"error_callername",
                      "install_name":"error_installname"})
@@ -147,7 +148,14 @@ def _check_module_missing(obj, msg=None, call=False):
 
 def _check_callable_missing(obj, msg=None):
     with pytest.raises(AttributeError) as excinfo:
-        obj()
+        try:
+            obj()
+        except:
+            print("vvvvvvvv")
+            traceback.print_exc()
+            print("^^^^^^^")
+            raise
+
     if msg is not None:
         assert str(excinfo.value) == msg
 
@@ -234,13 +242,13 @@ def test_callable_missing(modname, errors, cnames, fn):
         lazys = fn(modname, *cnames, error_strings=errors)
     for lazy, cname in zip(lazys, cnames):
         if errors is None:
-            expected_err = lazy_import._MSG_CALLABLE.format(module=modname,
+            expected_err = lazy_import._MSG_MEMBER.format(module=modname,
                                                    caller=__name__,
                                                    install_name=basename,
-                                                   callable=cname)
+                                                   member=cname)
         else:
-            errors['callable'] = cname
-            expected_err = errors["msg_callable"].format(**errors)
+            errors['member'] = cname
+            expected_err = errors["msg_member"].format(**errors)
         _check_callable_missing(lazy, msg=expected_err)
     
 @pytest.mark.parametrize("modname, errors, cnames, fn",

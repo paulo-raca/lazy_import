@@ -53,10 +53,12 @@ Files and directories
 
 """
 
-__all__ = ['lazy_module', 'lazy_callable', 'lazy_function', 'lazy_class',
+__all__ = ['lazy_module', 'lazy_callable', 'lazy_member', 'lazy_function', 'lazy_class',
            'LazyModule', 'LazyCallable', 'module_basename', '_MSG',
-           '_MSG_CALLABLE']
+           '_MSG_MEMBER']
 
+from functools import cache
+import traceback
 from types import ModuleType
 import sys
 try:
@@ -154,11 +156,11 @@ class LazyModule(ModuleType):
                 return sys.modules[self.__name__+"."+attr]
             except KeyError:
                 pass
-            # Check if it's one of the lazy callables
+            # Check if it's one of the lazy members
             try:
-                _callable = type(self)._lazy_import_callables[attr]
-                logger.debug("Returning lazy-callable '{}'.".format(attr))
-                return _callable
+                _member = type(self)._lazy_import_members[attr]
+                logger.debug("Returning lazy-member '{}'.".format(attr))
+                return _member
             except (AttributeError, KeyError) as err:
                 logger.debug("Proceeding to load module {}, "
                              "from requested value {}"
@@ -178,11 +180,11 @@ class LazyModule(ModuleType):
 
 
 class LazyCallable(object):
-    """Class for lazily-loaded callables that triggers module loading on access
-
+    """
+    Class for lazily-loaded callables that triggers module loading on access
     """
     def __init__(self, *args):
-        if len(args) != 2:
+        if len(args) != 1:
             # Maybe the user tried to base a class off this lazy callable?
             try:
                 logger.debug("Got wrong number of args when init'ing "
@@ -196,36 +198,15 @@ class LazyCallable(object):
                 raise_from(TypeError("LazyCallable takes exactly 2 arguments: "
                                 "a module/lazy module object and the name of "
                                 "a callable to be lazily loaded."), None)
-        self.module, self.cname = args
-        self.modclass = type(self.module)
+        self.resolver = args[0]
         self.callable = None
-        # Need to save these, since the module-loading gets rid of them
-        self.error_msgs = self.modclass._lazy_import_error_msgs
-        self.error_strings = self.modclass._lazy_import_error_strings
+        
 
     def __call__(self, *args, **kwargs):
         # No need to go through all the reloading more than once.
-        if self.callable:
-            return self.callable(*args, **kwargs)
-        try:
-            del self.modclass._lazy_import_callables[self.cname]
-        except (AttributeError, KeyError):
-            pass
-        try:
-            self.callable = getattr(self.module, self.cname)
-        except AttributeError:
-            msg = self.error_msgs['msg_callable']
-            raise_from(AttributeError(
-                msg.format(callable=self.cname, **self.error_strings)), None)
-        except ImportError as err:
-            # Import failed. We reset the dict and re-raise the ImportError.
-            try:
-                self.modclass._lazy_import_callables[self.cname] = self
-            except AttributeError:
-                self.modclass._lazy_import_callables = {self.cname: self}
-            raise_from(err, None)
-        else:
-            return self.callable(*args, **kwargs)
+        if self.callable is None:
+            self.callable = self.resolver()
+        return self.callable(*args, **kwargs)
 
 
 ### Functions ###
@@ -317,7 +298,7 @@ def lazy_module(modname, error_strings=None, lazy_mod_class=LazyModule,
 
     See Also
     --------
-    :func:`lazy_callable`
+    :func:`lazy_member`
     :class:`LazyModule`
 
     """
@@ -354,12 +335,12 @@ def _lazy_module(modname, error_strings, lazy_mod_class):
                 class _LazyModule(lazy_mod_class):
                     _lazy_import_error_msgs = {'msg': err_s.pop('msg')}
                     try:
-                        _lazy_import_error_msgs['msg_callable'] = \
-                                err_s.pop('msg_callable')
+                        _lazy_import_error_msgs['msg_member'] = \
+                                err_s.pop('msg_member')
                     except KeyError:
                         pass
                     _lazy_import_error_strings = err_s
-                    _lazy_import_callables = {}
+                    _lazy_import_members = {}
                     _lazy_import_submodules = {}
 
                     def __repr__(self):
@@ -381,10 +362,10 @@ def _lazy_module(modname, error_strings, lazy_mod_class):
         return sys.modules[fullmodname]
 
 
-def lazy_callable(modname, *names, **kwargs):
+def lazy_member(modname, *names, **kwargs):
     """Performs lazy importing of one or more callables.
 
-    :func:`lazy_callable` creates functions that are thin wrappers that pass
+    :func:`lazy_member` creates functions that are thin wrappers that pass
     any and all arguments straight to the target module's callables. These can
     be functions or classes. The full loading of that module is only actually
     triggered when the returned lazy function itself is called. This lazy
@@ -392,11 +373,11 @@ def lazy_callable(modname, *names, **kwargs):
     :func:`lazy_module`.
     
     If, however, the target module has already been fully imported prior
-    to invocation of :func:`lazy_callable`, then the target callables
+    to invocation of :func:`lazy_member`, then the target callables
     themselves are returned and no lazy imports are made.
 
     :func:`lazy_function` and :func:`lazy_function` are aliases of
-    :func:`lazy_callable`.
+    :func:`lazy_member`.
 
     Parameters
     ----------
@@ -412,9 +393,9 @@ def lazy_callable(modname, *names, **kwargs):
          missing module, or a missing callable name in the loaded module).
          *error_string* follows the same usage as described under
          :func:`lazy_module`, with the exceptions that 1) a further key,
-         'msg_callable', can be supplied to be used as the error when a module
+         'msg_member', can be supplied to be used as the error when a module
          is successfully loaded but the target callable can't be found therein
-         (defaulting to :attr:`lazy_import._MSG_CALLABLE`); 2) a key 'callable'
+         (defaulting to :attr:`lazy_import._MSG_MEMBER`); 2) a key 'callable'
          is always added with the callable name being loaded.
     lazy_mod_class : type, optional
          See definition under :func:`lazy_module`.
@@ -434,7 +415,7 @@ def lazy_callable(modname, *names, **kwargs):
     Notes
     -----
     Unlike :func:`lazy_module`, which returns a lazy module that eventually
-    mutates into the fully-functional version, :func:`lazy_callable` only
+    mutates into the fully-functional version, :func:`lazy_member` only
     returns thin wrappers that never change. This means that the returned
     wrapper object never truly becomes the one under the module's namespace,
     even after successful loading of the module in *modname*. This is fine for
@@ -446,7 +427,7 @@ def lazy_callable(modname, *names, **kwargs):
     Examples
     --------
     >>> import lazy_import, sys
-    >>> fn = lazy_import.lazy_callable("numpy.arange")
+    >>> fn = lazy_import.lazy_member("numpy.arange")
     >>> sys.modules['numpy']
     Lazily-loaded module numpy
     >>> fn(10)
@@ -455,7 +436,7 @@ def lazy_callable(modname, *names, **kwargs):
     <module 'numpy' from '/usr/local/lib/python3.5/site-packages/numpy/__init__.py'>
 
     >>> import lazy_import, sys
-    >>> cl = lazy_import.lazy_callable("numpy.ndarray") # a class
+    >>> cl = lazy_import.lazy_member("numpy.ndarray") # a class
     >>> obj = cl([1, 2]) # This works OK (and also triggers the loading of numpy)
     >>> class MySubclass(cl): # This fails because cls is just a wrapper,
     >>>     pass              #  not an actual class.
@@ -477,23 +458,49 @@ def lazy_callable(modname, *names, **kwargs):
     if not names:
         # We allow passing a single string as 'modname.callable_name',
         # in which case the wrapper is returned directly and not as a list.
-        return _lazy_callable(modname, name, error_strings.copy(),
+        return _lazy_member(modname, name, error_strings.copy(),
                                 lazy_mod_class, lazy_call_class)
-    return tuple(_lazy_callable(modname, cname, error_strings.copy(),
+    return tuple(_lazy_member(modname, cname, error_strings.copy(),
                         lazy_mod_class, lazy_call_class) for cname in names)
 
-lazy_function = lazy_class = lazy_callable
+lazy_function = lazy_class = lazy_callable = lazy_member
 
-def _lazy_callable(modname, cname, error_strings,
+def _lazy_member(modname, cname, error_strings,
                      lazy_mod_class, lazy_call_class):
     # We could do most of this in the LazyCallable __init__, but here we can
     # pre-check whether to actually be lazy or not.
     module = _lazy_module(modname, error_strings, lazy_mod_class)
     modclass = type(module)
+    error_msgs = modclass._lazy_import_error_msgs
+    error_strings = modclass._lazy_import_error_strings
     if (issubclass(modclass, LazyModule) and
-        hasattr(modclass, '_lazy_import_callables')):
-        modclass._lazy_import_callables.setdefault(
-            cname, lazy_call_class(module, cname))
+        hasattr(modclass, '_lazy_import_members')):
+
+        #@cache
+        def lazy_resolve():
+            try:
+                placeholder = modclass._lazy_import_members.pop(cname)
+            except (AttributeError, KeyError):
+                placeholder = None
+            try:
+                return getattr(module, cname)
+            except AttributeError:
+                msg = error_msgs['msg_member']
+                print("Traceback vvv")
+                traceback.print_exc()
+                print("Traceback ^^^")
+                raise_from(AttributeError(
+                    msg.format(member=cname, **error_strings)), None)
+            except ImportError as err:
+                # Import failed. We reset the dict and re-raise the ImportError.
+                try:
+                    modclass._lazy_import_members[cname] = placeholder
+                except AttributeError:
+                    modclass._lazy_import_members = {cname: placeholder}
+                raise_from(err, None)
+        
+        modclass._lazy_import_members.setdefault(
+            cname, lazy_call_class(lazy_resolve))
     return getattr(module, cname)
 
 
@@ -571,13 +578,13 @@ _MSG = ("{caller} attempted to use a functionality that requires module "
         "{module}, but it couldn't be loaded. Please install {install_name} "
         "and retry.")
 
-_MSG_CALLABLE = ("{caller} attempted to use a functionality that requires "
-           "{callable}, of module {module}, but it couldn't be found in that "
+_MSG_MEMBER = ("{caller} attempted to use a functionality that requires "
+           "{member}, of module {module}, but it couldn't be found in that "
            "module. Please install a version of {install_name} that has "
-           "{module}.{callable} and retry.")
+           "{module}.{member} and retry.")
 
 _CLS_ATTRS = ("_lazy_import_error_strings", "_lazy_import_error_msgs",
-              "_lazy_import_callables", "_lazy_import_submodules", "__repr__")
+              "_lazy_import_members", "_lazy_import_submodules", "__repr__")
 
 _DELETION_DICT = ("_lazy_import_submodules",)
 
@@ -601,7 +608,7 @@ def _set_default_errornames(modname, error_strings, call=False):
     error_strings.setdefault('install_name', module_basename(modname))
     error_strings.setdefault('msg', _MSG)
     if call:
-        error_strings.setdefault('msg_callable', _MSG_CALLABLE)
+        error_strings.setdefault('msg_member', _MSG_MEMBER)
 
 
 def _caller_name(depth=2, default=''):
