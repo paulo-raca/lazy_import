@@ -250,20 +250,7 @@ def test_callable_missing(modname, errors, cnames, fn):
             errors['member'] = cname
             expected_err = errors["msg_member"].format(**errors)
         _check_callable_missing(lazy, msg=expected_err)
-    
-@pytest.mark.parametrize("modname, errors, cnames, fn",
-        itertools.product(NAMES_EXISTING, ERROR_MSGS, CALLABLE_NAMES,
-                          CALLABLE_ALIASES))
-def test_error_callable_as_baseclass(modname, errors, cnames, fn):
-    _check_not_loaded(modname)
-    if isinstance(cnames, six.string_types):
-        lazys = (fn(modname+"."+cnames, error_strings=errors),)
-    else:
-        lazys = fn(modname, *cnames, error_strings=errors)
-    for lazy in lazys:
-        with pytest.raises(NotImplementedError) as excinfo:
-            class TestClass(lazy):
-                pass
+
 
 @pytest.mark.parametrize("modname",
                 [modname for modname in NAMES_EXISTING if '.' in modname])

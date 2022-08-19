@@ -58,9 +58,9 @@ __all__ = ['lazy_module', 'lazy_callable', 'lazy_member', 'lazy_function', 'lazy
            '_MSG_MEMBER']
 
 from functools import cache
-import traceback
 from types import ModuleType
 import sys
+from lazy_object_proxy import Proxy as LazyProxy
 try:
     from importlib._bootstrap import _ImportLockContext
 except ImportError:
@@ -177,36 +177,6 @@ class LazyModule(ModuleType):
                                     .__getattribute__("__name__")))
         _load_module(self)
         return super(LazyModule, self).__setattr__(attr, value)
-
-
-class LazyCallable(object):
-    """
-    Class for lazily-loaded callables that triggers module loading on access
-    """
-    def __init__(self, *args):
-        if len(args) != 1:
-            # Maybe the user tried to base a class off this lazy callable?
-            try:
-                logger.debug("Got wrong number of args when init'ing "
-                             "LazyCallable. args is '{}'".format(args))
-                base = args[1][0]
-                if isinstance(base, LazyCallable) and len(args) == 3:
-                    raise NotImplementedError("It seems you are trying to use "
-                                              "a lazy callable as a class "
-                                              "base. This is not supported.")
-            except (IndexError, TypeError):
-                raise_from(TypeError("LazyCallable takes exactly 2 arguments: "
-                                "a module/lazy module object and the name of "
-                                "a callable to be lazily loaded."), None)
-        self.resolver = args[0]
-        self.callable = None
-        
-
-    def __call__(self, *args, **kwargs):
-        # No need to go through all the reloading more than once.
-        if self.callable is None:
-            self.callable = self.resolver()
-        return self.callable(*args, **kwargs)
 
 
 ### Functions ###
@@ -450,8 +420,9 @@ def lazy_member(modname, *names, **kwargs):
     """
     if not names:
         modname, _, name = modname.rpartition(".")
+
     lazy_mod_class = _setdef(kwargs, 'lazy_mod_class', LazyModule)
-    lazy_call_class = _setdef(kwargs, 'lazy_call_class', LazyCallable)
+    lazy_call_class = _setdef(kwargs, 'lazy_call_class', LazyProxy)
     error_strings = _setdef(kwargs, 'error_strings', {})
     _set_default_errornames(modname, error_strings, call=True)
 
@@ -465,18 +436,20 @@ def lazy_member(modname, *names, **kwargs):
 
 lazy_function = lazy_class = lazy_callable = lazy_member
 
+
 def _lazy_member(modname, cname, error_strings,
                      lazy_mod_class, lazy_call_class):
     # We could do most of this in the LazyCallable __init__, but here we can
     # pre-check whether to actually be lazy or not.
     module = _lazy_module(modname, error_strings, lazy_mod_class)
     modclass = type(module)
-    error_msgs = modclass._lazy_import_error_msgs
-    error_strings = modclass._lazy_import_error_strings
     if (issubclass(modclass, LazyModule) and
         hasattr(modclass, '_lazy_import_members')):
 
-        #@cache
+        error_msgs = modclass._lazy_import_error_msgs
+        error_strings = modclass._lazy_import_error_strings
+
+        @cache
         def lazy_resolve():
             try:
                 placeholder = modclass._lazy_import_members.pop(cname)
@@ -486,9 +459,6 @@ def _lazy_member(modname, cname, error_strings,
                 return getattr(module, cname)
             except AttributeError:
                 msg = error_msgs['msg_member']
-                print("Traceback vvv")
-                traceback.print_exc()
-                print("Traceback ^^^")
                 raise_from(AttributeError(
                     msg.format(member=cname, **error_strings)), None)
             except ImportError as err:
